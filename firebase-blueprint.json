@@ -1,0 +1,83 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Stores user profile information and settings.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Unique identifier for the user." },
+        "email": { "type": "string", "format": "email", "description": "User's email address." },
+        "displayName": { "type": "string", "description": "User's display name." },
+        "photoURL": { "type": "string", "format": "uri", "description": "URL to the user's profile picture." },
+        "lastLogin": { "type": "string", "format": "date-time", "description": "Timestamp of the last login." }
+      },
+      "required": ["uid", "email"]
+    },
+    "Conversation": {
+      "title": "Conversation Thread",
+      "description": "Stores a thread of chat messages between a user and the AI.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "UID of the user who owns this conversation." },
+        "title": { "type": "string", "description": "The title of the conversation (usually the first query)." },
+        "messages": { 
+          "type": "array", 
+          "items": { 
+            "type": "object",
+            "properties": {
+              "role": { "type": "string", "enum": ["user", "model"] },
+              "content": { "type": "string" },
+              "timestamp": { "type": "string" },
+              "sources": { "type": "array" },
+              "thinking": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "description": "List of messages in the conversation." 
+        },
+        "timestamp": { "type": "string", "format": "date-time", "description": "When the conversation started." },
+        "lastUpdated": { "type": "string", "format": "date-time", "description": "When the last message was added." }
+      },
+      "required": ["userId", "title", "messages", "timestamp", "lastUpdated"]
+    },
+    "SavedSearch": {
+      "title": "Saved Conversation",
+      "description": "Stores conversations saved by the user to their library.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "UID of the user who saved this conversation." },
+        "title": { "type": "string", "description": "The title of the conversation." },
+        "messages": { 
+          "type": "array", 
+          "items": { 
+            "type": "object",
+            "properties": {
+              "role": { "type": "string", "enum": ["user", "model"] },
+              "content": { "type": "string" },
+              "timestamp": { "type": "string" },
+              "sources": { "type": "array" },
+              "thinking": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "description": "List of messages in the saved conversation." 
+        },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the conversation was saved." },
+        "lastUpdated": { "type": "string", "format": "date-time", "description": "When the conversation was last updated." }
+      },
+      "required": ["userId", "title", "messages", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile document."
+    },
+    "/users/{userId}/conversations/{conversationId}": {
+      "schema": "Conversation",
+      "description": "User's grouped chat conversations."
+    },
+    "/users/{userId}/saved_searches/{searchId}": {
+      "schema": "SavedSearch",
+      "description": "User's saved conversations in their library."
+    }
+  }
+}

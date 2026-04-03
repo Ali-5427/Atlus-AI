@@ -1,0 +1,107 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - uid: string (required) - User's unique ID
+    //   - email: string (required) - User's email
+    //   - displayName: string (optional) - User's display name
+    //   - photoURL: string (optional) - User's photo URL
+    //   - lastLogin: timestamp (optional) - Last login time
+    //
+    // Collection: users/{userId}/conversations
+    // Document ID: {conversationId}
+    // Fields:
+    //   - userId: string (required) - Owner's UID
+    //   - title: string (required) - Conversation title
+    //   - messages: list (required) - Array of message objects
+    //   - timestamp: timestamp (required) - Creation time
+    //   - lastUpdated: timestamp (required) - Last update time
+    //
+    // Collection: users/{userId}/saved_searches
+    // Document ID: {searchId}
+    // Fields:
+    //   - userId: string (required) - Owner's UID
+    //   - title: string (required) - Saved title
+    //   - messages: list (required) - Array of message objects
+    //   - createdAt: timestamp (required) - Save time
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "jailadeen149@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email']) &&
+             data.uid is string &&
+             data.email is string &&
+             data.email.size() < 255;
+    }
+
+    function isValidConversation(data) {
+      return data.keys().hasAll(['userId', 'title', 'messages', 'timestamp', 'lastUpdated']) &&
+             data.userId == request.auth.uid &&
+             data.title is string && data.title.size() < 500 &&
+             data.messages is list && data.messages.size() <= 20 &&
+             (data.timestamp is timestamp || data.timestamp is string) &&
+             (data.lastUpdated is timestamp || data.lastUpdated is string);
+    }
+
+    function isValidSavedSearch(data) {
+      return data.keys().hasAll(['userId', 'title', 'messages', 'createdAt']) &&
+             data.userId == request.auth.uid &&
+             data.title is string && data.title.size() < 500 &&
+             data.messages is list && data.messages.size() <= 20 &&
+             (data.createdAt is timestamp || data.createdAt is string);
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && isValidUser(request.resource.data);
+      
+      match /conversations/{conversationId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId) && isValidConversation(request.resource.data);
+        allow update: if isOwner(userId) && isValidConversation(request.resource.data);
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+
+      match /chat_history/{chatId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+
+      match /saved_searches/{searchId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId) && isValidSavedSearch(request.resource.data);
+        allow update: if isOwner(userId) && isValidSavedSearch(request.resource.data);
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+    }
+  }
+}
