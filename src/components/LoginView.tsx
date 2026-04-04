@@ -50,7 +50,7 @@ export const LoginView = () => {
               </div>
               <div>
                 <h3 className="text-xs sm:text-sm font-semibold text-foreground">Secure & Private</h3>
-                <p className="text-[11px] text-muted leading-tight">Your data is encrypted and protected by Firebase.</p>
+                <p className="text-[11px] text-muted leading-tight">Your data is stored locally and protected by Atlus AI.</p>
               </div>
             </div>
           </div>

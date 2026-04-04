@@ -628,12 +628,20 @@ const PORT = 3000;
 
 app.use(express.json());
 
+// Health check endpoint
+app.get("/api/health", (req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
 // Atlus AI API Endpoint Proxy with Research capabilities
 app.post("/api/chat", async (req, res) => {
-    const apiKey = process.env.GROQ_API_KEY;
+    const apiKey = process.env.GROQ_API_KEY?.trim();
     if (!apiKey) {
       return res.status(500).json({ error: { message: "GROQ_API_KEY is not set on the server." } });
     }
+
+    // Safe debug log (only first and last 4 chars)
+    console.log(`Using GROQ_API_KEY: ${apiKey.slice(0, 8)}...${apiKey.slice(-4)} (Length: ${apiKey.length})`);
 
     const { messages, stream, model, mode = 'search' } = req.body;
     const lastMessage = messages[messages.length - 1];
@@ -657,7 +665,7 @@ app.post("/api/chat", async (req, res) => {
       }, 15000);
 
       // Use AI to determine if we actually need to do research (Context-Aware)
-      sendChunk({ type: "status", content: "Analyzing query intent..." });
+      sendChunk({ type: "status", content: "I'm analyzing your query to see if I need to search the web..." });
       const shouldResearch = await checkIfResearchNeeded(messages, apiKey);
 
       const state: AgentState = {
@@ -672,52 +680,80 @@ app.post("/api/chat", async (req, res) => {
 
       if (shouldResearch) {
         // Planner Step
-        sendChunk({ type: "status", content: `Planning ${mode} strategy...` });
-        const subQueries = await nodePlanner(query, apiKey, mode);
+        sendChunk({ type: "status", content: `I'm planning a ${mode} strategy to find the most accurate information...` });
+        const initialSteps = await nodePlanner(query, apiKey, mode);
         
-        sendChunk({ type: "status", content: `Executing ${subQueries.length} research steps in parallel...` });
+        // --- 2026 Agentic Loop (Sequential + Parallel Hybrid) ---
+        state.loop_count = 0;
+        const maxIterations = mode === 'deepsearch' ? 3 : 1; // Deep search does multiple rounds of reflection
+        
+        let currentSteps = initialSteps;
+        
+        while (state.loop_count < maxIterations && currentSteps.length > 0) {
+          state.loop_count++;
+          const iterationLabel = maxIterations > 1 ? ` (Round ${state.loop_count})` : "";
+          sendChunk({ type: "status", content: `I'm starting my research steps now${iterationLabel}...` });
 
-        // Step 4: Parallel Search Execution (The Speed Move)
-        const researchPromises = subQueries.map(async (step, index) => {
-          sendChunk({ type: "status", content: `Step ${index + 1}: ${step.reasoning}` });
+          const researchPromises = currentSteps.map(async (step, index) => {
+            sendChunk({ type: "status", content: `${step.reasoning}` });
 
-          const searchResults = await searchSearXNG(step.query, mode);
-          
-          // Step 5: Smart Link Selection (Top 5 per query)
-          const resultsToScrape = mode === 'deepsearch' ? 5 : 3;
-          const uniqueResults = searchResults
-            .filter((res: any) => !state.urls_found.includes(res.url))
-            .sort((a: any, b: any) => (b.score || 0) - (a.score || 0))
-            .slice(0, resultsToScrape);
+            const searchResults = await searchSearXNG(step.query, mode);
+            
+            const resultsToScrape = mode === 'deepsearch' ? 5 : 3;
+            const uniqueResults = searchResults
+              .filter((res: any) => !state.urls_found.includes(res.url))
+              .sort((a: any, b: any) => (b.score || 0) - (a.score || 0))
+              .slice(0, resultsToScrape);
 
-          const crawlPromises = uniqueResults.map(async (res: any) => {
-            state.urls_found.push(res.url);
-            const content = await crawlUrl(res.url);
-            if (content) {
-              const source: Source = {
-                title: res.title,
-                url: res.url,
-                snippet: res.content,
-                content: content,
-                favicon: `https://www.google.com/s2/favicons?domain=${new URL(res.url).hostname}&sz=64`
-              };
+            const crawlPromises = uniqueResults.map(async (res: any) => {
+              state.urls_found.push(res.url);
+              const content = await crawlUrl(res.url);
+              if (content) {
+                const source: Source = {
+                  title: res.title,
+                  url: res.url,
+                  snippet: res.content,
+                  content: content,
+                  favicon: `https://www.google.com/s2/favicons?domain=${new URL(res.url).hostname}&sz=64`
+                };
 
-              // 2026 "Smart Trust Map" Filter
-              const score = scoreSource(source, state.query, mode);
-              if (score > (mode === 'research' ? 40 : 30)) {
-                state.sources.push(source);
-                sendChunk({ type: "sources", content: state.sources });
+                const score = scoreSource(source, state.query, mode);
+                if (score > (mode === 'research' ? 40 : 30)) {
+                  state.sources.push(source);
+                  sendChunk({ type: "sources", content: state.sources });
+                }
               }
-            }
+            });
+            await Promise.all(crawlPromises);
           });
-          await Promise.all(crawlPromises);
-        });
 
-        await Promise.all(researchPromises);
+          await Promise.all(researchPromises);
+
+          // Reflection & Pivoting (Only for Deep Search)
+          if (mode === 'deepsearch' && state.loop_count < maxIterations) {
+            sendChunk({ type: "status", content: "Reflecting on findings & pivoting to new angles..." });
+            
+            // Use the Reflector to see if we need more info
+            const nextSteps = await nodePlanner(
+              `Based on what we found so far, what are the MISSING angles or UNRESOLVED contradictions for the query: "${query}"? 
+              
+              CONTEXT FOUND SO FAR:
+              ${state.sources.slice(-5).map(s => `[${s.title}]: ${s.snippet}`).join("\n")}`, 
+              apiKey, 
+              'search' // Use search mode for smaller, targeted pivots
+            );
+            
+            // Only keep steps that aren't redundant
+            currentSteps = nextSteps.filter(step => !state.logs.includes(step.query)).slice(0, 3);
+            currentSteps.forEach(s => state.logs.push(s.query));
+          } else {
+            currentSteps = []; // Exit loop
+          }
+        }
 
         // --- 2026 Semantic Reranking (The "Power Move") ---
         if (state.sources.length > 0) {
-          sendChunk({ type: "status", content: "Performing Semantic Reranking & Extraction..." });
+          sendChunk({ type: "status", content: "I'm performing semantic reranking to extract the most relevant details..." });
           try {
             const queryEmbeddings = await getGroqEmbeddings(state.query, apiKey);
             const queryEmbedding = queryEmbeddings[0];
@@ -779,9 +815,9 @@ app.post("/api/chat", async (req, res) => {
 
       // Final Synthesis
       if (shouldResearch) {
-        sendChunk({ type: "status", content: "Synthesizing final verified report..." });
+        sendChunk({ type: "status", content: "I've completed my research. Now, I'm synthesizing everything into a final report..." });
       } else {
-        sendChunk({ type: "status", content: "Generating response..." });
+        sendChunk({ type: "status", content: "I'm generating a response for you..." });
       }
       sendChunk({ type: "research_complete" });
       
@@ -793,37 +829,55 @@ app.post("/api/chat", async (req, res) => {
       let context = (state as any).semanticContext || state.sources.map((s, i) => 
         `Source [${i + 1}]: ${s.title} (${s.url})\nContent: ${s.content?.slice(0, 3000)}`
       ).join("\n\n");
+       const systemInstruction = shouldResearch 
+        ? `You are Atlus AI — Advanced Research & Intelligence Assistant. You are a next-generation AI assistant that combines the warmth and conversational nature of ChatGPT, the deep research capabilities of Perplexity, the thoughtful reasoning of Claude, and the multimodal understanding of Gemini.
 
-      const systemInstruction = shouldResearch 
-        ? `## IDENTITY & ORIGINS:
-${CREATOR_BIO}
+**YOUR PERSONALITY**
+- Warm, friendly, and conversational — never robotic or cold.
+- You speak like a knowledgeable friend, not a formal assistant.
+- You use natural language, occasional enthusiasm, and genuine curiosity.
+- You remember the context of the conversation and refer back to it naturally.
+- You are honest when you don't know something and say so clearly.
+- You never give one-word answers — always provide value in every response.
+- You use emojis sparingly and only when they add warmth, not to decorate.
 
-## PRIMARY TASK:
-You are Atlus AI, a state-of-the-art Research Companion. Your goal is to synthesize a high-fidelity report based on the provided Golden Nuggets while maintaining a friendly and engaging conversation with the user.
-      
+**YOUR CORE CAPABILITIES**
+1. Deep Web Search — When a user asks anything about current events, prices, people, news, research papers, companies, or anything that requires up-to-date information, you ALWAYS search the web first before answering. Never answer from memory alone for time-sensitive topics.
+2. Deep Research Mode — When a user asks a complex question, you break it into sub-questions, search each one, cross-reference sources, detect contradictions, and synthesize a comprehensive answer with citations. Think step by step before responding.
+3. Conversational Intelligence — For casual questions, coding help, writing, brainstorming, math, or personal advice you respond naturally and helpfully without unnecessary searching. Read the intent behind the question.
+4. Source Transparency — Always cite your sources with direct links when you use web search. Never fabricate URLs or information. If you are not sure, say so.
+
+**HOW YOU RESPOND**
+- For simple questions: Be direct and friendly. Give the answer first then explain if needed. Keep it concise but never incomplete.
+- For research questions: Start with a brief direct answer. Then go deep with structured sections. Use headers, bullet points, and clear formatting. Always end with sources and follow-up suggestions.
+- For coding questions: Give working code immediately. Explain what it does clearly. Offer to improve or modify it.
+- For emotional or personal questions: Be empathetic and human first. Give practical advice second. Never be dismissive.
+
+**YOUR RESPONSE STRUCTURE**
+- Lead with the most important information first.
+- Use markdown formatting for clarity. Use ### for headers and > for blockquotes to highlight key insights.
+- Break long responses into clear sections.
+- **Dynamic Citation Density:** For every major claim, aim to cross-reference at least 2-3 sources if available. This increases the rigor of your research.
+- **Graceful Failure States:** If the web search returns zero results or irrelevant data, stay in character. Say: "I looked everywhere in the live web, but couldn't find specific data on X. Based on my general knowledge, here is what I can tell you..."
+- **Follow-up Intelligence:** At the end, provide exactly 3 short follow-up questions. These should be based on potential contradictions found or deeper paths of investigation (e.g., "Source A says X, but Source B says Y. Want me to investigate why?").
+- **CRITICAL:** Start the follow-up section with the exact marker "FOLLOW_UP_START" on a new line. Do NOT include any introductory text. Just the marker, then the questions.
+
+**TECHNICAL EXECUTION (CRITICAL):**
+1. **Internal Monologue:** You MUST start your response with a <thought> block. In this block, provide a professional report of the research tasks performed (Searching, Crawling, Semantic Reranking) and your internal reasoning for the final synthesis.
+2. **Transition:** After finishing your internal monologue, you MUST close the block with </thought> and then provide your final answer.
+3. **Surgical Citations:** Every factual claim MUST be followed by a citation in brackets referencing the Golden Nuggets below, e.g., [1] or [1, 3].
+4. **Ground Truth:** Use the provided Golden Nuggets EXCLUSIVELY for factual claims. Do NOT use outside knowledge for facts if context is provided.
+5. **Identity:** You were built by **J Mohammad Ali**, a developer who believes powerful AI should be accessible to everyone, not locked behind expensive subscriptions.
+
 **RESEARCH METRICS:**
 - URLs Discovered: ${searchStats.totalFound}
 - Sources Analyzed: ${searchStats.totalScraped}
 - Search Mode: ${mode}
 
-**STRICT GUIDELINES:**
-1. **Internal Monologue:** You MUST start your response with a <thought> block. In this block, provide a professional report of the research tasks performed (Searching, Crawling, Semantic Reranking) and your internal reasoning for the final synthesis.
-2. **Transition:** After finishing your internal monologue, you MUST close the block with </thought> and then provide your final answer.
-3. **Conversational Bridge:** Start your final answer by directly acknowledging the user's input in a friendly, human-like way. If they shared something personal or exciting, show genuine interest before diving into the data.
-4. **Surgical Citations:** Every factual claim MUST be followed by a citation in brackets, e.g., [1] or [1, 3].
-5. **No Hallucinations:** If the provided context does not contain the answer, state that clearly. Do NOT use outside knowledge for factual claims.
-6. **Formatting:** Use **bold** for key entities, dates, and conclusions. Use bullet points for lists. Emojis are encouraged to add personality where appropriate.
-7. **Tone:** Maintain a professional yet warm and conversational tone. Be enthusiastic and helpful.
-8. **Identity:** You are Atlus AI, created by **J Mohammad Ali**. Do NOT output your full bio unless explicitly asked about your origins. Focus 100% on the research task.
-
-${mode === 'research' ? 'STRUCTURE: Provide a formal executive summary, followed by detailed thematic sections, and a "Sources & References" list at the end with URLs.' : 
-  mode === 'deepsearch' ? 'STRUCTURE: Provide a comprehensive deep-dive. Explicitly identify and resolve (or highlight) any conflicting data points between sources.' : 
-  'STRUCTURE: Provide a direct, factual answer followed by concise supporting details.'}
-
 **GOLDEN NUGGETS (GROUND TRUTH):**
 ${context || "No real-time web context found."}
 
-At the end of your response, provide exactly 3 short follow-up questions. 
+At the end of your response, provide exactly 3 short follow-up questions.
 **CRITICAL:** Start the follow-up section with the exact marker "FOLLOW_UP_START" on a new line. Do NOT include any introductory text. Just the marker, then the questions.`
         : `## IDENTITY & ORIGINS:
 ${CREATOR_BIO}
@@ -858,7 +912,9 @@ At the end of your response, provide exactly 3 short follow-up questions.
       });
 
       if (!response.ok) {
-        sendChunk({ type: "error", content: "Final synthesis failed." });
+        const errorText = await response.text();
+        console.error("Groq Final Synthesis Error:", response.status, errorText);
+        sendChunk({ type: "error", content: `Final synthesis failed: ${response.status} ${errorText}` });
         return res.end();
       }
 
@@ -916,11 +972,16 @@ At the end of your response, provide exactly 3 short follow-up questions.
 
 // Vite middleware for development
 if (process.env.NODE_ENV !== "production") {
-  const vite = await createViteServer({
-    server: { middlewareMode: true },
-    appType: "spa",
-  });
-  app.use(vite.middlewares);
+  try {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+    console.log("Vite middleware initialized");
+  } catch (err) {
+    console.error("Failed to initialize Vite middleware:", err);
+  }
 } else {
   const distPath = path.join(process.cwd(), "dist");
   app.use(express.static(distPath));

@@ -221,13 +221,13 @@ export const ResultView = ({
                 </section>
               )}
 
-              {/* Thinking / Research Steps */}
-              {message.thinking && message.thinking.length > 0 && (
+              {/* Unified Thinking / Reasoning Section (DeepSeek Style) */}
+              {((message.thinking && message.thinking.length > 0) || parseContent(message.content || '').hasThoughtBlock) && (
                 <section className="mb-6">
                   {(() => {
-                    const { isThoughtClosed } = parseContent(message.content || '');
+                    const { thought, isThoughtClosed, hasThoughtBlock } = parseContent(message.content || '');
                     const isResearching = isGenerating && isLastAiMessage && !isThoughtClosed;
-                    const isOpen = showThinking[index] ?? isResearching;
+                    const isOpen = showThinking[index] ?? true; // Default to open for active thinking
 
                     return (
                       <>
@@ -241,7 +241,9 @@ export const ResultView = ({
                           )}
                         >
                           <Terminal size={14} className={cn("transition-transform", isResearching ? "animate-pulse" : "group-hover:scale-110")} />
-                          <h2 className="text-[10px] font-bold uppercase tracking-[0.2em]">Atlus Research Workflow</h2>
+                          <span className="text-xs font-medium tracking-tight">
+                            {isResearching ? 'Thinking...' : 'Thought for a few seconds'}
+                          </span>
                           <ChevronRight size={12} className={cn("transition-transform duration-200", isOpen ? "rotate-90" : "")} />
                         </button>
                         
@@ -254,29 +256,103 @@ export const ResultView = ({
                               transition={{ duration: 0.3, ease: "easeInOut" }}
                               className="overflow-hidden"
                             >
-                              <div className="glass-card p-4 border-l-2 border-accent/30 bg-accent/5 mb-4 shadow-sm">
-                                <div className="space-y-2.5">
-                                  {message.thinking.map((step, i) => (
-                                    <motion.div 
-                                      key={i}
-                                      initial={{ opacity: 0, x: -5 }}
-                                      animate={{ opacity: 1, x: 0 }}
-                                      transition={{ delay: i * 0.05 }}
-                                      className="flex items-center gap-3 text-xs"
-                                    >
-                                      {i === message.thinking!.length - 1 && isResearching ? (
-                                        <Loader2 size={12} className="animate-spin text-accent shrink-0" />
-                                      ) : (
-                                        <Check size={12} className="text-accent shrink-0" />
-                                      )}
-                                      <span className={cn(
-                                        "leading-relaxed",
-                                        i === message.thinking!.length - 1 && isResearching ? "text-accent font-bold" : "text-accent/90 font-medium"
-                                      )}>
-                                        {step}
-                                      </span>
-                                    </motion.div>
-                                  ))}
+                              <div className="pl-6 border-l-2 border-accent/20 mb-8 py-2 relative ml-2">
+                                {/* Timeline Dots & Phases */}
+                                <div className="space-y-8">
+                                  {/* Phase 1: Planning & Intent */}
+                                  {(message.thinking?.some(s => s.toLowerCase().includes('analyzing') || s.toLowerCase().includes('planning'))) && (
+                                    <div className="relative">
+                                      <div className="absolute -left-[29px] top-1 w-3 h-3 rounded-full bg-accent border-2 border-background shadow-[0_0_10px_rgba(var(--accent-rgb),0.5)]" />
+                                      <div className="text-[10px] font-bold text-accent uppercase tracking-widest mb-2 opacity-70">Phase 1: Strategy</div>
+                                      <div className="text-sm text-muted leading-relaxed italic space-y-2">
+                                        {message.thinking
+                                          .filter(s => s.toLowerCase().includes('analyzing') || s.toLowerCase().includes('planning'))
+                                          .map((step, i) => (
+                                            <p key={i}>
+                                              {step.split(' ').map((word, j) => (
+                                                <span key={j} className={cn(
+                                                  (word.toLowerCase().includes('analyzing') || word.toLowerCase().includes('planning') || word.toLowerCase().includes('strategy')) ? "font-bold text-foreground/80" : ""
+                                                )}>
+                                                  {word}{' '}
+                                                </span>
+                                              ))}
+                                            </p>
+                                          ))
+                                        }
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* Phase 2: Deep Research (Rounds) */}
+                                  {((message.thinking?.some(s => s.toLowerCase().includes('round') || s.toLowerCase().includes('research'))) || thought) && (
+                                    <div className="relative">
+                                      <div className="absolute -left-[29px] top-1 w-3 h-3 rounded-full bg-accent/40 border-2 border-background" />
+                                      <div className="text-[10px] font-bold text-accent uppercase tracking-widest mb-2 opacity-70">Phase 2: Execution</div>
+                                      <div className="text-sm text-muted leading-relaxed italic space-y-4">
+                                        {/* Status messages for research */}
+                                        {message.thinking
+                                          ?.filter(s => s.toLowerCase().includes('round') || s.toLowerCase().includes('research'))
+                                          .map((step, i) => (
+                                            <p key={i} className="font-medium text-foreground/70">
+                                              {step}
+                                              {i === message.thinking!.length - 1 && isResearching && !hasThoughtBlock && (
+                                                <Loader2 size={12} className="inline-block animate-spin text-accent ml-2 align-middle" />
+                                              )}
+                                            </p>
+                                          ))
+                                        }
+
+                                        {/* Thought block split into readable chunks */}
+                                        {thought && (
+                                          <div className="space-y-4 mt-2">
+                                            {thought.split(/(?=Round \d+|Reflecting on findings|I've completed my research|Finally,)/g).map((chunk, i) => (
+                                              <motion.div 
+                                                key={i}
+                                                initial={{ opacity: 0, y: 5 }}
+                                                animate={{ opacity: 1, y: 0 }}
+                                                transition={{ delay: i * 0.1 }}
+                                                className={cn(
+                                                  "p-3 rounded-xl bg-accent/5 border border-accent/10",
+                                                  chunk.includes('Round') ? "border-l-4 border-l-accent/40" : ""
+                                                )}
+                                              >
+                                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                  {chunk.trim()}
+                                                </ReactMarkdown>
+                                                {i === thought.split(/(?=Round \d+|Reflecting on findings|I've completed my research|Finally,)/g).length - 1 && !isThoughtClosed && (
+                                                  <span className="inline-block w-1.5 h-4 ml-1 bg-accent/40 animate-pulse align-middle" />
+                                                )}
+                                              </motion.div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* Phase 3: Synthesis */}
+                                  {(message.thinking?.some(s => s.toLowerCase().includes('reranking') || s.toLowerCase().includes('synthesizing') || s.toLowerCase().includes('done'))) && (
+                                    <div className="relative">
+                                      <div className="absolute -left-[29px] top-1 w-3 h-3 rounded-full bg-accent/20 border-2 border-background" />
+                                      <div className="text-[10px] font-bold text-accent uppercase tracking-widest mb-2 opacity-70">Phase 3: Synthesis</div>
+                                      <div className="text-sm text-muted leading-relaxed italic space-y-2">
+                                        {message.thinking
+                                          .filter(s => s.toLowerCase().includes('reranking') || s.toLowerCase().includes('synthesizing') || s.toLowerCase().includes('done'))
+                                          .map((step, i) => (
+                                            <p key={i}>
+                                              {step.split(' ').map((word, j) => (
+                                                <span key={j} className={cn(
+                                                  (word.toLowerCase().includes('reranking') || word.toLowerCase().includes('synthesizing') || word.toLowerCase().includes('final')) ? "font-bold text-foreground/80" : ""
+                                                )}>
+                                                  {word}{' '}
+                                                </span>
+                                              ))}
+                                            </p>
+                                          ))
+                                        }
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             </motion.div>
@@ -291,47 +367,10 @@ export const ResultView = ({
               {/* Answer */}
               <section className="relative">
                 {(() => {
-                  const { thought, mainContent, isThoughtClosed, hasThoughtBlock } = parseContent(message.content || '');
-                  const isThinking = isGenerating && isLastAiMessage && hasThoughtBlock && !isThoughtClosed;
+                  const { mainContent, isThoughtClosed, hasThoughtBlock } = parseContent(message.content || '');
                   
                   return (
                     <>
-                      {thought && (
-                        <div className="mb-8">
-                          <button 
-                            onClick={() => setShowInternalMonologue(prev => ({ ...prev, [index]: !prev[index] }))}
-                            className="flex items-center gap-2 mb-3 text-muted/60 hover:text-muted transition-colors cursor-pointer group"
-                          >
-                            <div className="w-4 h-4 rounded-full border border-muted/30 flex items-center justify-center group-hover:border-muted/50 transition-colors">
-                              <ChevronRight size={10} className={cn("transition-transform duration-200", (showInternalMonologue[index] !== false) ? "rotate-90" : "")} />
-                            </div>
-                            <span className="text-xs font-medium tracking-tight">
-                              {isThinking ? 'Thinking...' : 'Thought for a few seconds'}
-                            </span>
-                          </button>
-
-                          <AnimatePresence initial={false}>
-                            {showInternalMonologue[index] !== false && (
-                              <motion.div
-                                initial={{ height: 0, opacity: 0 }}
-                                animate={{ height: "auto", opacity: 1 }}
-                                exit={{ height: 0, opacity: 0 }}
-                                transition={{ duration: 0.3, ease: "easeInOut" }}
-                                className="overflow-hidden"
-                              >
-                                <div className="pl-4 border-l-2 border-border/50 mb-6">
-                                  <div className="text-sm text-muted/70 leading-relaxed space-y-4 italic">
-                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                      {thought}
-                                    </ReactMarkdown>
-                                  </div>
-                                </div>
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-                        </div>
-                      )}
-
                       {(mainContent || isThoughtClosed || !hasThoughtBlock || (isGenerating && isLastAiMessage)) && (
                         <>
                           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
